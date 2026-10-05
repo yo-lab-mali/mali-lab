@@ -7,7 +7,7 @@ compiled P0 binaries through QEMU virtio-9p, runs them inside the guest against
 ## Flow
 
 ```text
-host build/tests
+host build/tests-aarch64      (cross build, kept separate from build/tests)
       |
       v
 build/p0-guest-share/bin
@@ -22,6 +22,13 @@ build/p0-guest-share/bin
       v
 results/p0-qemu-results.json
 ```
+
+The runner cross-compiles into `build/tests-aarch64`, not `build/tests`, and builds
+the binaries itself rather than trusting `make tests`. `configs/qemu-aarch64.env`
+assigns `CROSS_COMPILE` without exporting it, so a plain `scripts/build-tests.sh` call
+would silently fall back to the host gcc and ship x86-64 binaries that cannot exec in
+the guest. Keeping the output separate also stops the guest run from clobbering the
+host-architecture binaries that `make test-p0` uses.
 
 The rootfs must contain `rootfs/overlay/usr/local/bin/mali-p0-guest` and the
 kernel must have 9p/virtio support. The supplied AArch64 config now enables

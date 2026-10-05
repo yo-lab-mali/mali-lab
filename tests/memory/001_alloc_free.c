@@ -6,7 +6,7 @@ int main(void)
 {
     const char *name = "memory/001_alloc_free";
     int fd = mali_open();
-    if (fd < 0) return test_skip(name, "/dev/mali0 is unavailable");
+    if (fd < 0) return test_skip(name, mali_open_reason());
 
     uint64_t va = 0;
     if (p0_alloc(fd, P0_PAGES, &va) < 0) {

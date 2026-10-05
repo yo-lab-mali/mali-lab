@@ -2,6 +2,42 @@
 # Guest-side P0 runner. The host exposes build/tests through virtio-9p.
 set -u
 
+# --- init preamble --------------------------------------------------------
+# This script is PID 1 (init= on the kernel command line), so no init system
+# runs first: /proc and /sys are unmounted and no module has been loaded.
+# Everything below happens in that gap, and nothing else will do it:
+#   * /proc and /sys  - now_ms() reads /proc/uptime, the timeout is parsed from
+#                       /proc/cmdline, and mali_version comes from /sys.
+#   * mali_kbase.ko   - CONFIG_MALI_MIDGARD=m, so the driver is a module and
+#                       /dev/mali0 does not exist until it is inserted.
+# Every step is non-fatal by design: a missing or unloadable driver must
+# degrade to SKIP with a recorded reason rather than wedge the run.
+mount -t proc     proc     /proc 2>/dev/null || true
+mount -t sysfs    sysfs    /sys  2>/dev/null || true
+mount -t devtmpfs devtmpfs /dev  2>/dev/null || true
+
+MALI_MODULE=/lib/modules/mali_kbase.ko
+if [ -f "$MALI_MODULE" ]; then
+    if insmod "$MALI_MODULE" 2>/dev/null; then
+        echo "[DRIVER] insmod $MALI_MODULE ok"
+    else
+        echo "[DRIVER] insmod $MALI_MODULE failed; P0 tests will report SKIP" >&2
+    fi
+else
+    echo "[DRIVER] $MALI_MODULE absent; P0 tests will report SKIP" >&2
+fi
+
+# Loading the module is not the same as the driver probing. When the Device
+# Tree has no matching Mali node the module loads, /sys/module/mali_kbase
+# exists, and /dev/mali0 still never appears. Only the version file plus the
+# kernel's own "Probed as mali0" on the serial console distinguish the two.
+if [ -r /sys/module/mali_kbase/version ]; then
+    echo "[DRIVER] mali_kbase loaded, version $(cat /sys/module/mali_kbase/version)"
+else
+    echo "[DRIVER] mali_kbase not present in /sys/module" >&2
+fi
+# -------------------------------------------------------------------------
+
 MOUNT=/mnt/mali-p0
 RESULT="$MOUNT/results/p0-results.json"
 BIN="$MOUNT/bin"

@@ -28,3 +28,26 @@ JIT / tiler:
 
 Exact ABI structures should always be taken from the selected r54p0 UAPI headers,
 not reconstructed from this inventory.
+
+## Verified r54p0 encodings
+
+Compiled from `AX504X08X-SW-99002-r54p0-01eac0`:
+
+| Ioctl | Encoded value | `sizeof` struct |
+|---|---:|---:|
+| `KBASE_IOCTL_SET_FLAGS` | `0x40048001` | 4 |
+| `KBASE_IOCTL_MEM_ALLOC` | `0xC0208005` | 32 |
+| `KBASE_IOCTL_MEM_FREE` | `0x40088007` | 8 |
+| `KBASE_IOCTL_CS_QUEUE_REGISTER` | `0x40108024` | 16 |
+| `KBASE_IOCTL_CS_QUEUE_KICK` | `0x40088025` | 8 |
+| `KBASE_IOCTL_CS_QUEUE_BIND` | `0xC0108027` | 16 |
+| `KBASE_IOCTL_CS_QUEUE_TERMINATE` | `0x40088029` | 8 |
+| `KBASE_IOCTL_CS_QUEUE_GROUP_CREATE` | `0xC078803F` | 120 |
+| `KBASE_IOCTL_CS_QUEUE_GROUP_TERMINATE` | `0x4008802B` | 8 |
+| `KBASE_IOCTL_VERSION_CHECK` | `0xC0048034` | 4 |
+| `KBASE_IOCTL_MEM_ALIAS` | `0xC0208015` | 32 |
+| `KBASE_IOCTL_MEM_IMPORT` | `0xC0188016` | 24 |
+| `KBASE_IOCTL_MEM_ALLOC_EX` | `0xC040803B` | 64 |
+
+See `docs/abi-check.md` for the versioned `CS_QUEUE_GROUP_CREATE` variants and
+`docs/ioctl-gate.md` for the mandatory handshake.

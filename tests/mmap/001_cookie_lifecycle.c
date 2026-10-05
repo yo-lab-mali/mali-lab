@@ -6,7 +6,7 @@ int main(void)
 {
     const char *name = "mmap/001_cookie_lifecycle";
     int fd = mali_open();
-    if (fd < 0) return test_skip(name, "/dev/mali0 is unavailable");
+    if (fd < 0) return test_skip(name, mali_open_reason());
     uint64_t va = 0;
     if (p0_alloc(fd, 2, &va) < 0) { mali_close(fd); return test_fail(name, "MEM_ALLOC failed"); }
 

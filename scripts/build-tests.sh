@@ -1,12 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-KDIR="${KERNEL_DIR:-$ROOT/work/linux}"
-OUT="$ROOT/build/tests"
+# Default to the integrated tree, but fall back to the header kit shipped in a
+# packaged lab: work/ is deleted once dist/ exists, and the tests only ever read
+# the UAPI headers. Same fallback as configure-abi-check.sh, which this calls, so
+# the two must agree or the ABI gate checks a different tree than the build.
+if [[ -n "${KERNEL_DIR:-}" ]]; then
+  KDIR="$KERNEL_DIR"
+elif [[ -d "$ROOT/work/linux/include" ]]; then
+  KDIR="$ROOT/work/linux"
+elif [[ -d "$ROOT/dist/headers/include" ]]; then
+  KDIR="$ROOT/dist/headers"
+else
+  KDIR="$ROOT/work/linux"
+fi
+# Overridable because the host runner and the QEMU runner need different
+# architectures in the same tree; sharing one directory means whichever ran
+# last wins and the other runner execs the wrong ELF.
+OUT="${BUILD_TESTS_OUT:-$ROOT/build/tests}"
 
 if [[ ! -d "$KDIR/include" ]]; then
   echo "error: kernel tree not found: $KDIR" >&2
-  echo "Set KERNEL_DIR to the integrated Linux+r54p0 tree." >&2
+  echo "Set KERNEL_DIR to the integrated Linux+r54p0 tree, or to a packaged" >&2
+  echo "header kit:  KERNEL_DIR=./dist/headers make tests" >&2
   exit 1
 fi
 
