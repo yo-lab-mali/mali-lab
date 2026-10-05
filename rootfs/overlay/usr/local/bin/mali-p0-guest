@@ -1,0 +1,196 @@
+#!/bin/sh
+# Guest-side P0 runner. The host exposes build/tests through virtio-9p.
+set -u
+
+MOUNT=/mnt/mali-p0
+RESULT="$MOUNT/results/p0-results.json"
+BIN="$MOUNT/bin"
+TMP=/run/mali-p0
+mkdir -p "$MOUNT" "$TMP"
+
+mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576 mali-p0 "$MOUNT" 2>"$TMP/mount.err"
+if [ $? -ne 0 ]; then
+    # The shared result path is unavailable when the mount itself fails. The
+    # host runner records this as an infrastructure error when no result file
+    # appears, while the console/log still contains the mount failure.
+    echo "[INFRA] failed to mount virtio-9p test payload" >&2
+    cat "$TMP/mount.err" >&2
+    poweroff -f 2>/dev/null || halt -f 2>/dev/null || true
+    exit 1
+fi
+
+# Shell-only JSON writer: no jq/python dependency is required in the guest.
+now_ms() {
+    # /proc/uptime avoids requiring a wall-clock utility.
+    awk '{ printf "%d", $1 * 1000 }' /proc/uptime 2>/dev/null || echo 0
+}
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+signal_name() {
+    case "$1" in
+        1) echo SIGTERM;; 2) echo SIGINT;; 3) echo SIGQUIT;; 4) echo SIGILL;;
+        6) echo SIGABRT;; 9) echo SIGKILL;; 11) echo SIGSEGV;; 13) echo SIGPIPE;;
+        14) echo SIGALRM;; 15) echo SIGTERM;; *) echo "SIG$1";;
+    esac
+}
+
+# Per-test timeout is supplied on the kernel command line as
+# mali_p0_timeout=<seconds>. Keep a conservative default for minimal guests.
+TEST_TIMEOUT_SEC=30
+for arg in $(cat /proc/cmdline 2>/dev/null); do
+    case "$arg" in
+        mali_p0_timeout=*) TEST_TIMEOUT_SEC="${arg#*=}" ;;
+    esac
+done
+case "$TEST_TIMEOUT_SEC" in
+    ''|*[!0-9]*) TEST_TIMEOUT_SEC=30 ;;
+    0) TEST_TIMEOUT_SEC=1 ;;
+esac
+
+kernel="$(uname -r 2>/dev/null || echo unknown)"
+arch="$(uname -m 2>/dev/null || echo unknown)"
+mali_version="$(cat /sys/module/mali_kbase/version 2>/dev/null || echo unknown)"
+
+INFRA_FILE="$TMP/infra-errors.json"
+printf '%s' '[' > "$INFRA_FILE"
+infra_first=1
+add_infra_error() {
+    code="$1"
+    message="$2"
+    if [ "$infra_first" -eq 1 ]; then
+        infra_first=0
+    else
+        printf ',' >> "$INFRA_FILE"
+    fi
+    printf '{"code":"%s","message":"%s"}' \
+        "$(json_escape "$code")" "$(json_escape "$message")" >> "$INFRA_FILE"
+}
+
+printf '%s\n' '{"schema_version":2,"runner":"mali-p0-guest","status":"running","tests":[' > "$RESULT"
+first=1
+pass=0
+skip=0
+fail=0
+timeout=0
+crash=0
+infra=0
+
+run_test() {
+    group="$1"
+    name="$2"
+    path="$BIN/$name"
+    log="$MOUNT/logs/$group-$name.log"
+    start=$(now_ms)
+    rc=125
+    status=infra_error
+    timed_out=false
+    signal=""
+    error=""
+
+    if [ ! -x "$path" ]; then
+        error="test binary missing"
+        echo "[INFRA] $group/$name: $error" | tee "$log"
+        add_infra_error "test_binary_missing" "$group/$name: $error"
+        infra=$((infra+1))
+    else
+        echo "===== P0 $group/$name (timeout=${TEST_TIMEOUT_SEC}s) ====="
+        # Run asynchronously so a wedged ioctl/test cannot block the runner.
+        # A separate watchdog avoids relying on shell-specific timeout helpers.
+        timeout_marker="$TMP/timeout-$group-$name"
+        rm -f "$timeout_marker"
+        "$path" >"$log" 2>&1 &
+        pid=$!
+        (
+            sleep "$TEST_TIMEOUT_SEC"
+            if kill -0 "$pid" 2>/dev/null; then
+                printf '%s\n' SIGTERM > "$timeout_marker"
+                echo "[TIMEOUT] $group/$name exceeded ${TEST_TIMEOUT_SEC}s; sending SIGTERM" >> "$log"
+                kill -TERM "$pid" 2>/dev/null || true
+                sleep 1
+                if kill -0 "$pid" 2>/dev/null; then
+                    printf '%s\n' SIGKILL > "$timeout_marker"
+                    echo "[TIMEOUT] $group/$name still running; sending SIGKILL" >> "$log"
+                    kill -KILL "$pid" 2>/dev/null || true
+                fi
+            fi
+        ) &
+        watchdog=$!
+        wait "$pid"
+        rc=$?
+        kill "$watchdog" 2>/dev/null || true
+        wait "$watchdog" 2>/dev/null || true
+        if [ -f "$timeout_marker" ]; then
+            timed_out=true
+            timeout_signal="$(cat "$timeout_marker" 2>/dev/null || echo SIGTERM)"
+            rm -f "$timeout_marker"
+        else
+            timeout_signal=""
+        fi
+        cat "$log"
+
+        if [ "$timed_out" = true ]; then
+            status=timeout
+            timeout=$((timeout+1))
+            signal="$timeout_signal"
+            error="test exceeded per-test timeout"
+        elif [ "$rc" -eq 0 ]; then
+            status=pass
+            pass=$((pass+1))
+        elif [ "$rc" -eq 77 ]; then
+            status=skip
+            skip=$((skip+1))
+        elif [ "$rc" -ge 129 ] && [ "$rc" -le 255 ]; then
+            status=crash
+            crash=$((crash+1))
+            signal="$(signal_name $((rc - 128)))"
+            error="test terminated by signal"
+        else
+            status=fail
+            fail=$((fail+1))
+        fi
+    fi
+
+    end=$(now_ms)
+    duration=$((end-start))
+    [ "$first" -eq 1 ] || printf ',\n' >> "$RESULT"
+    first=0
+    printf '{"name":"%s/%s","status":"%s","exit_code":%d,"duration_ms":%d,"timeout_sec":%d,"timed_out":%s,"signal":"%s","error":"%s","log":"logs/%s"}' \
+        "$(json_escape "$group")" "$(json_escape "$name")" "$status" "$rc" "$duration" "$TEST_TIMEOUT_SEC" "$timed_out" \
+        "$(json_escape "$signal")" "$(json_escape "$error")" "$group-$name.log" >> "$RESULT"
+}
+
+run_test memory 001_alloc_free
+run_test memory 002_alloc_mmap
+run_test memory 003_mmap_unmap
+run_test memory 004_free_before_unmap
+run_test mmap 001_cookie_lifecycle
+run_test mmap 003_vma_lifecycle
+run_test user_io 001_queue_bind
+run_test user_io 002_user_io_map
+
+if [ "$infra" -gt 0 ]; then
+    overall=infra_error
+elif [ "$timeout" -gt 0 ] || [ "$crash" -gt 0 ] || [ "$fail" -gt 0 ]; then
+    overall=fail
+else
+    overall=pass
+fi
+
+printf '\n],"summary":{"pass":%d,"skip":%d,"fail":%d,"timeout":%d,"crash":%d,"infra_error":%d},"infrastructure_errors":' \
+    "$pass" "$skip" "$fail" "$timeout" "$crash" "$infra" >> "$RESULT"
+cat "$INFRA_FILE" >> "$RESULT"
+printf ']' >> "$RESULT"
+printf ',"environment":{"kernel":"%s","arch":"%s","mali_version":"%s","device":"/dev/mali0","test_timeout_sec":%d},"status":"%s"}\n' \
+    "$(json_escape "$kernel")" "$(json_escape "$arch")" "$(json_escape "$mali_version")" "$TEST_TIMEOUT_SEC" "$overall" >> "$RESULT"
+
+sync
+if [ "$infra" -gt 0 ] || [ "$fail" -gt 0 ] || [ "$timeout" -gt 0 ] || [ "$crash" -gt 0 ]; then
+    rc=1
+else
+    rc=0
+fi
+
+echo "P0 summary: pass=$pass skip=$skip fail=$fail timeout=$timeout crash=$crash infra_error=$infra"
+poweroff -f 2>/dev/null || halt -f 2>/dev/null || true
+exit "$rc"

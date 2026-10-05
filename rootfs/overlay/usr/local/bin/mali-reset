@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "No automatic reset is performed by this lab."

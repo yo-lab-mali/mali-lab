@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "=== Mali lab ==="
+cat /sys/module/mali_kbase/version 2>/dev/null || true
+ls -l /dev/mali0 2>/dev/null || true

@@ -1,0 +1,4 @@
+name: synchronization
+seed: 1
+max_steps: 32
+operations: []

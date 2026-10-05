@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "[mali-lab] starting"
+mkdir -p /var/lib/mali-lab
+/usr/local/bin/mali-env || true

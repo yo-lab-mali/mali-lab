@@ -1,0 +1,12 @@
+/*
+ * kcpu/001_create_queue
+ *
+ * Harness stub. Implement against the exact r54p0 UAPI headers after integrating
+ * the selected Arm source. Keep the operation sequence deterministic and log
+ * object lifetime transitions.
+ */
+#include <stdio.h>
+int main(void) {
+    printf("NOT IMPLEMENTED: kcpu/001_create_queue\n");
+    return 77;
+}

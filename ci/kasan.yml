@@ -1,0 +1,8 @@
+name: kasan
+on: [push, pull_request]
+jobs:
+  structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n scripts/*.sh qemu/aarch64/*.sh harness/runner/*.sh

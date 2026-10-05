@@ -1,0 +1,5 @@
+#!/bin/sh
+echo "kernel: $(uname -a)"
+echo "arch: $(uname -m)"
+echo "mali:"
+cat /sys/module/mali_kbase/version 2>/dev/null || true

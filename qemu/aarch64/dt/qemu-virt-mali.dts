@@ -1,0 +1,5 @@
+/*
+ * Template only. Merge into a machine-specific QEMU virt DT only if the
+ * corresponding address/interrupt resources are actually available.
+ */
+#include "mali-no-mali.dtsi"

@@ -1,0 +1,17 @@
+downloads/
+work/
+build/*
+!build/.gitkeep
+*.o
+*.ko
+*.dtb
+*.img
+*.cpio
+*.tar
+results/crashes/*
+results/warnings/*
+results/kasan/*
+results/lockdep/*
+results/dmesg/*
+results/reports/*
+__pycache__/
