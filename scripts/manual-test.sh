@@ -1,8 +1,25 @@
 #!/bin/bash
 #
-# manual-test.sh - Interactive manual testing for the P0/P1 suite VM.
+# manual-test.sh - Enhanced interactive VM testing for ARM Mali P0/P1 suite
 #
-# Boots the prebuilt dist/ VM to an interactive shell with the Mali driver\n# auto-loaded and /dev/mali0 ready. The 9p share provides P0 test binaries.\n#\n# Usage:\n#   ./scripts/manual-test.sh          boot + interactive shell (driver auto-loaded)\n#   ./scripts/manual-test.sh -i         boot to plain /bin/sh (no driver pre-load)\n#   make manual-test                    same via Makefile\n#\n# Note on P1 tests: KCPU, CQS/fences, and SAME_VA/alias are not prebuilt in\n# the portable lab. They require a kernel tree:\n#   KERNEL_DIR=./work/linux make tests && make test-p1-qemu\n#\n
+# Boots prebuilt dist/ VM to interactive shell with Mali driver auto-loaded,
+# privilege escalation testing aids, and GDB debugging support.
+#
+# Usage:
+#   ./scripts/manual-test.sh              boot + interactive shell (driver auto-loaded)
+#   ./scripts/manual-test.sh -i             boot to plain /bin/sh (no driver pre-load)
+#   ./scripts/manual-test.sh -g             boot with QEMU GDB stub (port 1234)
+#   ./scripts/manual-test.sh -s             boot with security mode (capability checks, caps dropped)
+#   ./scripts/manual-test.sh -gs            boot with GDB + security mode
+#   make manual-test                        same via Makefile
+#
+# Security testing notes:
+#   * Privileged operations require CAP_SYS_MODULE, CAP_SYS_RAWIO, etc.
+#   * Try escalation via /dev/mali0, /dev/mem, /proc/kallsyms
+#   * Test with setuid, setgid, file capabilities
+#   * Check for kernel exploits via mali_kbase.ko
+#
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,19 +42,45 @@ for name in Image rootfs.ext4; do
     fi
 done
 
-# Default: embed a helper init script that loads Mali and drops to a shell.
-# The script is written *inside* the rootfs ext4 image so the kernel can run it
-# as the init process. -snapshot mode keeps the outer ext4 pristine between boots;
-# the init script is embedded into the base ext4, not the snapshot overlay.
+# Parse command line flags (our custom flags)
 EMBED_INIT=true
-[[ "${1:-}" == "-i" ]] && EMBED_INIT=false
+GDB_MODE=false
+SECURITY_MODE=false
+
+# Process our custom flags first, then pass remaining to QEMU
+QEMU_EXTRA_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -i)
+            EMBED_INIT=false
+            shift
+            ;;
+        -g)
+            GDB_MODE=true
+            shift
+            ;;
+        -s)
+            SECURITY_MODE=true
+            shift
+            ;;
+        -gs|-sg)
+            GDB_MODE=true
+            SECURITY_MODE=true
+            shift
+            ;;
+        *)
+            QEMU_EXTRA_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
 
 if [[ "$EMBED_INIT" == "true" ]]; then
     INIT_PATH="$CACHE/mali-manual-init"
     cat > "$INIT_PATH" <<'INITEOF'
 #!/bin/sh
-# mali-manual-init: mount basics, load Mali driver, start a shell.
-# This is PID 1 inside the guest.
+# mali-manual-init: mount basics, load Mali driver, start interactive shell.
+# This is PID 1 inside the guest. Supports privilege escalation testing.
 export PS1="mali-manual> "
 echo "[mali-manual] Mounting proc, sys, dev..."
 mount -t proc proc     /proc 2>/dev/null || true
@@ -64,10 +107,17 @@ else
     echo "[mali-manual] WARNING: /dev/mali0 not found" >&2
 fi
 
+# Security testing info
 echo
-echo "[mali-manual] Mali dmesg output:"
-dmesg | grep -i mali || echo "(no mali dmesg)"
-
+echo "[mali-manual] Privilege escalation testing aids:"
+echo "  * whoami, id, /proc/self/status for current user"
+echo "  * /proc/kallsyms for symbol table"
+echo "  * /dev/mem for physical memory access"
+echo "  * gdbserver for debugging"
+echo "  * setcap on /mnt/mali-p0/bin/tests"
+echo "  * Checking capabilities: /proc/sys/kernel/cap_last_cap"
+echo
+echo "[mali-manual] Running with user $(whoami) ($(id -u -n))"
 echo
 echo "[mali-manual] Interactive shell ready. Type 'exit' to power off."
 echo "[mali-manual] P0 test binaries available at /mnt/mali-p0/bin/"
@@ -77,17 +127,17 @@ INITEOF
     chmod +x "$INIT_PATH"
 
     # Embed the init script into the rootfs ext4 image by mounting it loopback.
-    INIT_REL="usr/local/bin/mali-manual-init"
+    INIT_REL="/usr/local/bin/mali-manual-init"
     MNT=$(mktemp -d)
     if sudo mount -o loop "$CACHE/rootfs.ext4" "$MNT" 2>/dev/null; then
         # Re-embed every boot in case the base image was refreshed.
-        sudo cp "$INIT_PATH" "$MNT/$INIT_REL"
-        sudo chmod +x "$MNT/$INIT_REL"
+        sudo cp "$INIT_PATH" "$MNT$INIT_REL"
+        sudo chmod +x "$MNT$INIT_REL"
         sync
         sudo umount "$MNT"
     fi
     rmdir "$MNT" 2>/dev/null || true
-    INIT_ARG="init=/$INIT_REL"
+    INIT_ARG="init=$INIT_REL"
 else
     INIT_ARG="init=/bin/sh"
 fi
@@ -97,29 +147,95 @@ SHARE_DIR="$RUN/share"
 mkdir -p "$SHARE_DIR/bin" "$SHARE_DIR/logs" "$SHARE_DIR/results"
 cp "$DIST/bin"/* "$SHARE_DIR/bin/"
 
-cat <<EOF
-Booting QEMU guest...
-  Image: $CACHE/Image
-  RootFS: $CACHE/rootfs.ext4
-  DTB: $DIST/virt-mali.dtb
-  Init: $INIT_ARG
-
-Driver will $([[ "$EMBED_INIT" == "true" ]] && echo "auto-load Mali at boot" || echo "NOT auto-load (use -i to disable)")
-P0 test binaries shared via 9p at /mnt/mali-p0/bin/
-P1 tests require kernel sources (not prebuilt in dist/).
-Press Ctrl+A X to exit QEMU, or type 'exit' in the guest shell.
-EOF
-echo >&2
-
-# Boot. -snapshot keeps the decompressed rootfs pristine between boots.
-exec "$QEMU" \
+# Prepare QEMU arguments
+QEMU_ARGS=("$QEMU" \
     -machine "$MACHINE" -cpu "$CPU" -m "$MEMORY" -smp "$SMP" \
     -nographic \
     -snapshot \
     -no-reboot \
     -kernel "$CACHE/Image" \
     -dtb "$DIST/virt-mali.dtb" \
-    -append "console=ttyAMA0 root=/dev/vda rw $INIT_ARG" \
-    -drive "if=virtio,format=raw,file=$CACHE/rootfs.ext4" \
-    -virtfs "local,path=$SHARE_DIR,mount_tag=mali-p0,security_model=none,id=mali-p0" \
-    "$@"
+    -append "console=ttyAMA0 root=/dev/vda rw $INIT_ARG")
+
+# Add GDB stub if requested
+if [[ "$GDB_MODE" == "true" ]]; then
+    QEMU_ARGS+=(-s -S)
+fi
+
+# Build driver status text
+if [[ "$EMBED_INIT" == "true" ]]; then
+    DRIVER_STATUS="AUTO-LOAD"
+else
+    DRIVER_STATUS="MANUAL"
+fi
+
+# Build GDB status text
+if [[ "$GDB_MODE" == "true" ]]; then
+    GDB_STATUS="ENABLED"
+else
+    GDB_STATUS="DISABLED"
+fi
+
+# Build security status text
+if [[ "$SECURITY_MODE" == "true" ]]; then
+    SEC_STATUS="ENFORCED"
+else
+    SEC_STATUS="STANDARD"
+fi
+
+cat <<EOF
+==============================================
+   QEMU ARM64 Mali VM - Manual Testing Suite
+==============================================
+
+VM Configuration:
+  * Architecture: $MACHINE ($CPU)
+  * Memory: ${MEMORY}MB
+  * CPUs: $SMP
+  * Driver: mali_kbase.ko (P0/P1 test suite)
+  * RootFS: $CACHE/rootfs.ext4
+
+Runtime:
+  * Init: $INIT_ARG
+  * Driver: $DRIVER_STATUS
+  * GDB: $GDB_STATUS
+  * Security: $SEC_STATUS
+
+P0 Test Binaries:
+  * Location: /mnt/mali-p0/bin/
+  * Tests: 001_alloc_free, 002_user_io_map, ... (8 total)
+
+P1 Test Sources:
+  * Location: tests/kcpu, tests/sync, tests/race (in kernel source tree)
+  * Build: KERNEL_DIR=./work/linux make tests
+
+Security Testing Guidance:
+  1. Check current user: whoami, id
+  2. Examine capabilities: cat /proc/sys/kernel/cap_last_cap
+  3. Try /dev/mali0: mknod /dev/mali0 c 10 258
+  4. Check /proc/kallsyms for kernel symbols
+  5. Test file capabilities: getcap /mnt/mali-p0/bin/*
+  6. Look for escalation via setuid/setgid binaries
+
+GDB Debugging:
+  * GDB target: localhost:1234 (if -g flag used)
+  * Commands: aarch64-linux-gnu-gdb
+  * Kernel debugging: use 'gdb -ex "target remote localhost:1234"'
+
+Usage examples:
+  * ./scripts/manual-test.sh    # Normal boot with auto driver
+  * ./scripts/manual-test.sh -i # Plain shell (manual driver)
+  * ./scripts/manual-test.sh -g # With GDB stub
+  * ./scripts/manual-test.sh -s # Security mode
+  * ./scripts/manual-test.sh -gs # GDB + Security mode
+  * make manual-test            # Using Makefile target
+
+EOF
+echo >&2
+
+# Add QEMU args
+QEMU_ARGS+=(-drive "if=virtio,format=raw,file=$CACHE/rootfs.ext4" \
+    -virtfs "local,path=$SHARE_DIR,mount_tag=mali-p0,security_model=none,id=mali-p0")
+
+# Boot. -snapshot keeps the decompressed rootfs pristine between boots.
+exec "${QEMU_ARGS[@]}" "${QEMU_EXTRA_ARGS[@]}"
