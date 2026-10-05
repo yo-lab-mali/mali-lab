@@ -37,7 +37,7 @@ recompiles:
 
 ```bash
 ./qemu/aarch64/dumpdtb.sh
-export QEMU_DTB="$PWD/build/dtb/virt-mali.dtb"
+./dist/run.sh        # or: ./scripts/run-p0-qemu.sh
 ```
 
 The node must be inserted *after* the root's own properties and *before* its first
@@ -45,27 +45,18 @@ child; `dtc` rejects a tree where properties follow subnodes. The script re-read
 the rebuilt blob and fails if `arm,mali-midgard` is absent, so a silently useless DTB
 cannot reach a boot.
 
-`scripts/run-p0-qemu.sh` picks the result up through its `QEMU_DTB` hook, and
-`qemu/aarch64/run.sh` (what `make run` calls) defaults `QEMU_DTB` to
-`build/dtb/virt-mali.dtb`. Both warn loudly and boot anyway if the blob is missing.
-Passing no `-dtb` at all is the probe trap below.
+The result is committed at `dist/virt-mali.dtb`. `dist/run.sh` always passes it via
+`-dtb`, and `qemu/aarch64/run.sh` defaults to `$PWD/dist/virt-mali.dtb`; both warn
+loudly and boot anyway if it is missing. Passing no `-dtb` at all is the probe trap
+below.
 
 ## Boot and run
 
 ```bash
-make rootfs                                    # build/rootfs/rootfs.ext4
-make dtb                                       # build/dtb/virt-mali.dtb
-QEMU_DTB="$PWD/build/dtb/virt-mali.dtb" ./scripts/run-p0-qemu.sh
+./scripts/run-p0-qemu.sh    # full P0 suite; result JSON + validation under results/
+./dist/run.sh               # equivalent, self-contained
+make run                    # interactive busybox shell
 ```
-
-or, equivalently, `make all` builds all three and prints the runner command.
-
-`build-rootfs.sh` stages an Ubuntu base arm64 userspace plus `busybox-static`,
-overlays `rootfs/overlay/`, installs `build/kernel/mali_kbase.ko` into `/lib/modules/`
-and writes a raw ext4 image with `mke2fs -d` — no loop mount and no root required.
-Both downloads are pinned by SHA256 in the script. `busybox-static` is not optional:
-ubuntu-base ships neither `insmod` nor `poweroff`, and the runner is PID 1, so without
-a working `poweroff` the boot ends in a kernel panic instead of a clean shutdown.
 
 The guest runs `init=/usr/local/bin/mali-p0-guest`, which is PID 1, so nothing has
 mounted `/proc` or `/sys` and no module has been loaded when it starts. Its preamble

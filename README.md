@@ -18,23 +18,20 @@ separate phase.
 - Published archive MD5: `3bcd3870b58f83442b16b83e432e2f97`
 - Default No-Mali GPU model used by the documented 5th-Gen configuration: `tKRx`
 
-Do not commit the Arm source archive, kernel tree, firmware binaries, rootfs images,
-or generated build artifacts.
+This repository ships the prebuilt `dist/` lab (~44 MB). No kernel tree, no DDK
+archive, and no network access is needed after checkout.
 
 ## Quick start
 
 ```bash
-make bootstrap
-# Put the exact Arm r54p0 archive in downloads/ (or configure MALI_ARCHIVE)
-make verify
-make fetch-kernel
-make integrate
-make config
-make build
-make rootfs
-make tests
-make run
+./dist/run.sh        # boot the guest and run the 8 P0 tests
 ```
+
+The original build pipeline (`make verify`, `make kernel`, `make integrate`,
+`make config`, `make rootfs`, `make tests`) is retained as source in `scripts/` and
+documented in `docs/build.md`, but it is not required to run the shipped guest
+suite. `make` targets that depend on the kernel tree now fail fast with a pointer to
+`dist/run.sh` instead of the old source-based flow.
 
 ## Research priority
 

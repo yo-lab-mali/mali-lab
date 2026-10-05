@@ -42,19 +42,32 @@ TESTS=(
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '  %s\n' "$*"; }
 
-IMAGE="$HERE/Image"
-ROOTFS="$HERE/rootfs.ext4"
 DTB="$HERE/virt-mali.dtb"
 RUN="$HERE/.run"
+CACHE="$HERE/.cache"
 RESULTS="$RUN/results/p0-results.json"
 TIMEOUT="${P0_TEST_TIMEOUT_SEC:-30}"
 
 command -v "$QEMU" >/dev/null 2>&1 || die "$QEMU not found on PATH"
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "P0_TEST_TIMEOUT_SEC must be a positive integer"
-[[ -f "$IMAGE" ]] || die "missing $IMAGE"
-[[ -f "$ROOTFS" ]] || die "missing $ROOTFS"
 [[ -f "$DTB" ]]   || die "missing $DTB"
 
+# The big artifacts are committed gzipped, because dist/ must fit the repo
+# host's 100 MB per-file limit and rootfs.ext4 is 512 MB raw. Decompress the
+# two the kernel needs into a gitignored cache, once. The cached rootfs is
+# still opened with -snapshot, so it is never modified.
+mkdir -p "$CACHE"
+for pair in "Image:Image.gz" "rootfs.ext4:rootfs.ext4.gz"; do
+  raw="${pair%%:*}"; gz="${pair##*:}"
+  src="$HERE/$gz"; dst="$CACHE/$raw"
+  [[ -f "$src" ]] || die "missing $src"
+  if [[ ! -f "$dst" || "$src" -nt "$dst" ]]; then
+    info "decompressing $gz -> $raw"
+    gzip -dc "$src" > "$dst.tmp" && mv "$dst.tmp" "$dst" || die "failed to decompress $gz"
+  fi
+done
+IMAGE="$CACHE/Image"
+ROOTFS="$CACHE/rootfs.ext4"
 for t in "${TESTS[@]}"; do
   [[ -f "$HERE/bin/$t" ]] || die "missing test binary bin/$t"
 done

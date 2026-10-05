@@ -15,20 +15,31 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/configs/qemu-aarch64.env"
 
-KERNEL="$ROOT/build/kernel/Image"
-ROOTFS="$ROOT/build/rootfs/rootfs.ext4"
-[[ -f "$KERNEL" ]] || { echo "Missing $KERNEL (run: make kernel)"; exit 1; }
-[[ -f "$ROOTFS" ]] || { echo "Missing $ROOTFS (run: make rootfs)"; exit 1; }
+KERNEL_GZ="$ROOT/dist/Image.gz"
+ROOTFS_GZ="$ROOT/dist/rootfs.ext4.gz"
+CACHE="$ROOT/dist/.cache"
+mkdir -p "$CACHE"
+for pair in "Image:Image.gz" "rootfs.ext4:rootfs.ext4.gz"; do
+  raw="${pair%%:*}"; gz="${pair##*:}"
+  src="$ROOT/dist/$gz"; dst="$CACHE/$raw"
+  [[ -f "$src" ]] || { echo "Missing $src (the shipped lab is in dist/)"; exit 1; }
+  if [[ ! -f "$dst" || "$src" -nt "$dst" ]]; then
+    echo "decompressing $gz -> $raw" >&2
+    gzip -dc "$src" > "$dst.tmp" && mv "$dst.tmp" "$dst" || { echo "failed to decompress $gz"; exit 1; }
+  fi
+done
+KERNEL="$CACHE/Image"
+ROOTFS="$CACHE/rootfs.ext4"
 
-DTB="${QEMU_DTB:-$ROOT/build/dtb/virt-mali.dtb}"
+DTB="${QEMU_DTB:-$ROOT/dist/virt-mali.dtb}"
 dtb_arg=()
 if [[ -f "$DTB" ]]; then
   dtb_arg=(-dtb "$DTB")
   echo "using DTB $DTB"
 else
   echo "warning: no DTB at $DTB" >&2
-  echo "warning: run 'make dtb'; without a Mali node the driver never probes" >&2
-  echo "warning: and /dev/mali0 will not exist, so every test will skip" >&2
+  echo "warning: dist/virt-mali.dtb ships with the lab; without it the driver" >&2
+  echo "warning: never probes, so every P0 test would skip" >&2
 fi
 
 # This is the interactive boot: no init= on the cmdline, so the guest drops to a
@@ -50,6 +61,7 @@ EOF
 exec "$QEMU" \
   -machine "$MACHINE" -cpu "$CPU" -m "$MEMORY" -smp "$SMP" \
   -nographic \
+  -snapshot \
   -kernel "$KERNEL" \
   ${dtb_arg[@]+"${dtb_arg[@]}"} \
   -append "console=ttyAMA0 root=/dev/vda rw" \

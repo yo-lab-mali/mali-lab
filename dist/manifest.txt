@@ -1,0 +1,17 @@
+# mali-lab portable lab manifest
+# generated: 2026-10-05T19:39:03Z
+# artifacts below are gzipped; dist/run.sh decompresses them on first boot
+# integrity of everything in this directory: sha256sum -c SHA256SUMS
+
+[build]
+  kernel_version=6.6.158
+  kernel_url=https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.158.tar.xz
+  mali_archive=downloads/r54p0-01eac0.tar.gz (removed after packaging)
+  config_fragment=kernel/config/qemu-aarch64-r54p0.config
+  config_fragment_sha256=4c272578bca520a373fe3a11e29d8af9a4db721789e5504bf44b9408975cf8b3
+  host=Linux 6.8.0-1064-azure x86_64
+
+[notes]
+  dist/ is committed to git. Raw kernel Image, rootfs.ext4 and
+  mali_kbase.ko are NOT committed; the .gz forms are, and run.sh
+  gunzips them into dist/.run/ on first use.

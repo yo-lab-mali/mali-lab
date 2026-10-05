@@ -1,18 +1,15 @@
 # Guest-side P0 QEMU runner
 
 `scripts/run-p0-qemu.sh` boots the configured AArch64 QEMU guest, exposes the
-compiled P0 binaries through QEMU virtio-9p, runs them inside the guest against
+prebuilt P0 binaries through QEMU virtio-9p, runs them inside the guest against
 `/dev/mali0`, and copies a JSON result file back to `results/p0-qemu-results.json`.
 
 ## Flow
 
 ```text
-host build/tests-aarch64      (cross build, kept separate from build/tests)
+dist/bin  (8 prebuilt aarch64 binaries)
       |
-      v
-build/p0-guest-share/bin
-      |
-      | QEMU virtio-9p
+      | QEMU virtio-9p (dist/.run/bin)
       v
 /mnt/mali-p0/bin  ---> /dev/mali0
       |
@@ -23,28 +20,22 @@ build/p0-guest-share/bin
 results/p0-qemu-results.json
 ```
 
-The runner cross-compiles into `build/tests-aarch64`, not `build/tests`, and builds
-the binaries itself rather than trusting `make tests`. `configs/qemu-aarch64.env`
-assigns `CROSS_COMPILE` without exporting it, so a plain `scripts/build-tests.sh` call
-would silently fall back to the host gcc and ship x86-64 binaries that cannot exec in
-the guest. Keeping the output separate also stops the guest run from clobbering the
-host-architecture binaries that `make test-p0` uses.
+The real work lives in the self-contained `dist/run.sh`; `scripts/run-p0-qemu.sh`
+layers the guest result JSON and host-side validation on top. This replaced the
+old runner that cross-compiled into `build/tests-aarch64` on every invocation.
+`dist/run.sh` always passes `-dtb dist/virt-mali.dtb` and uses QEMU `-snapshot`
+so the decompressed rootfs is opened copy-on-write and never mutated.
 
 The rootfs must contain `rootfs/overlay/usr/local/bin/mali-p0-guest` and the
-kernel must have 9p/virtio support. The supplied AArch64 config now enables
+kernel must have 9p/virtio support. The supplied AArch64 config enables
 `CONFIG_NET_9P`, `CONFIG_NET_9P_VIRTIO`, and `CONFIG_9P_FS`.
 
 ## Run
 
 ```bash
-make tests
-make test-p0-qemu
-```
-
-Equivalent direct invocation:
-
-```bash
-./scripts/run-p0-qemu.sh
+./scripts/run-p0-qemu.sh     # validates + writes results/
+./dist/run.sh                # same boot, no validation step
+make test-p0-qemu            # repo target for the above
 ```
 
 Set the per-test timeout (default: 30 seconds):
@@ -53,20 +44,11 @@ Set the per-test timeout (default: 30 seconds):
 P0_TEST_TIMEOUT_SEC=60 ./scripts/run-p0-qemu.sh
 ```
 
-Optional environment overrides:
-
-```bash
-KERNEL=/path/to/Image \
-ROOTFS=/path/to/rootfs.ext4 \
-QEMU_DTB=/path/to/guest.dtb \
-./scripts/run-p0-qemu.sh
-```
-
-`QEMU_DTB` is optional. This is useful only when the supplied guest DT actually
-contains a Mali device compatible with the integrated driver. Stock QEMU's
-`virt` machine does not emulate a real Mali GPU; consequently `/dev/mali0` may
-be absent and the individual tests will report `skip` rather than pretending
-the GPU path was exercised.
+`dist/run.sh` also honours `P0_TEST_TIMEOUT_SEC`. There is no `QEMU_DTB` hook on
+it: the DTB is part of the shipped lab and is always passed, because the No-Mali
+driver only probes against a DTB that carries the `arm,mali-midgard` node.
+Stock QEMU's `virt` machine does not emulate a real Mali GPU; the tests exercise
+the driver's own bookkeeping.
 
 ## Result schema
 

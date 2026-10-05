@@ -8,38 +8,24 @@
 # can be deleted: nothing in dist/ is derived from them at run time.
 #
 # What goes in, and why each piece is needed:
-#   Image, rootfs.ext4   the bootable pair
-#   mali_kbase.ko        the module, also embedded in rootfs at /lib/modules/;
-#                        kept standalone so the image can be rebuilt if needed
+#   Image.gz, rootfs.ext4.gz, mali_kbase.ko.gz
+#                        the bootable pair + module, gzipped because the repo
+#                        host limits files to 100 MB and rootfs is 512 MB raw;
+#                        run.sh decompresses them on first boot
 #   virt-mali.dtb        REQUIRED for the driver to probe. QEMU synthesises its
 #                        own virt DTB when -dtb is omitted and it has no Mali node
 #   bin/                 the 8 prebuilt aarch64 P0 binaries; there are no
 #                        sources in a packaged lab, so they cannot be rebuilt
-#   headers/             include/uapi + include/linux from the integrated tree,
-#                        so 'make tests' and the ABI gate still work offline
 #   run.sh, qemu.env     standalone entry point and its machine settings
-#   manifest.txt         versions and a sha256 for every file above
+#   manifest.txt, SHA256SUMS  versions and a sha256 for every file above
 #
 # Usage:
 #   ./scripts/package-dist.sh
-#   KERNEL_DIR=/path/to/integrated/tree ./scripts/package-dist.sh
 #
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="${DIST:-$ROOT/dist}"
-# Same fallback as build-tests.sh and configure-abi-check.sh: work/ is deleted
-# once a lab is packaged, and the header kit in the existing dist/ is the only
-# UAPI source left. Without this, re-packaging a results-only checkout fails.
-if [[ -n "${KERNEL_DIR:-}" ]]; then
-  KDIR="$KERNEL_DIR"
-elif [[ -d "$ROOT/work/linux/include" ]]; then
-  KDIR="$ROOT/work/linux"
-elif [[ -d "$ROOT/dist/headers/include" ]]; then
-  KDIR="$ROOT/dist/headers"
-else
-  KDIR="$ROOT/work/linux"
-fi
 BUILD="${BUILD:-$ROOT/build}"
 
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -73,8 +59,6 @@ missing=()
 for t in "${TESTS[@]}"; do
   [[ -f "$TESTBIN/$t" ]] || missing+=("$TESTBIN/$t (run: make tests)")
 done
-[[ -d "$KDIR/include/uapi/gpu/arm/midgard" ]] || \
-  missing+=("$KDIR/include/uapi/gpu/arm/midgard (integrated kernel tree; see docs/build.md)")
 if (( ${#missing[@]} )); then
   printf 'error: cannot package, %d input(s) missing:\n' "${#missing[@]}" >&2
   printf '  %s\n' "${missing[@]}" >&2
@@ -94,40 +78,21 @@ fi
 # ---- assemble ---------------------------------------------------------------
 # dist/ is fully regenerated. run.sh is generated from scripts/dist-run.sh rather
 # than tracked in place, so wiping dist/ can never destroy a tracked file.
-#
-# The header source is staged out first: in a results-only checkout the fallback
-# above resolves KDIR to the *existing* dist/headers, which the wipe below would
-# otherwise delete a few lines before it is copied from.
-HEADER_SRC="$KDIR"
-STAGED_HDR=""
-if [[ "$(cd "$KDIR" && pwd -P)" == "$(cd "$DIST" 2>/dev/null && pwd -P || echo x)"/* ]]; then
-  STAGED_HDR="$(mktemp -d)"
-  trap 'rm -rf "$STAGED_HDR"' EXIT
-  info "staging header kit out of $DIST before regenerating it"
-  cp -a "$KDIR/include" "$STAGED_HDR/include"
-  HEADER_SRC="$STAGED_HDR"
-fi
-
 rm -rf "$DIST"
-mkdir -p "$DIST/bin" "$DIST/headers/include"
+mkdir -p "$DIST/bin"
 
-# --sparse=always: rootfs.ext4 is 512 MB apparent but ~102 MB of real blocks.
-# A plain cp would expand the holes and triple the size of the package.
-cp --sparse=always "$KERNEL" "$DIST/Image"
-cp --sparse=always "$ROOTFS" "$DIST/rootfs.ext4"
-cp "$KO"   "$DIST/mali_kbase.ko"
+# rootfs.ext4 is 512 MB raw and the repo host limits files to 100 MB, so the
+# shipped artifacts are the gzipped forms; run.sh decompresses them on first
+# boot. -9 because these are the only artifacts that travel with git clones.
+gzip -9 -c "$KERNEL"  > "$DIST/Image.gz"
+gzip -9 -c "$ROOTFS"  > "$DIST/rootfs.ext4.gz"
+gzip -9 -c "$KO"      > "$DIST/mali_kbase.ko.gz"
 cp "$DTB"  "$DIST/virt-mali.dtb"
 cp "$DTS"  "$DIST/virt-mali.dts"
 
 for t in "${TESTS[@]}"; do
   install -m 0755 "$TESTBIN/$t" "$DIST/bin/$t"
 done
-
-info "copying UAPI kit (include/uapi + include/linux) for offline test rebuilds"
-# include/linux cannot be dropped: include/uapi/linux/stddef.h includes
-# <linux/compiler_types.h>, which lives only in include/linux. Verified by
-# compiling the P0 tests for both aarch64 and the host against this subset alone.
-cp -a "$HEADER_SRC/include/uapi" "$HEADER_SRC/include/linux" "$DIST/headers/include/"
 
 install -m 0755 "$ROOT/scripts/dist-run.sh" "$DIST/run.sh"
 cp "$ROOT/configs/qemu-aarch64.env" "$DIST/qemu.env"
@@ -141,6 +106,7 @@ cp "$ROOT/configs/qemu-aarch64.env" "$DIST/qemu.env"
 {
   echo "# mali-lab portable lab manifest"
   echo "# generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "# artifacts are gzipped; run.sh decompresses them on first boot"
   echo "# integrity: sha256sum -c SHA256SUMS"
   echo
   echo "[build]"
@@ -148,14 +114,13 @@ cp "$ROOT/configs/qemu-aarch64.env" "$DIST/qemu.env"
     sed 's/^/  /' "$KERNEL_MANIFEST"
   fi
   echo "  config_fragment=$ROOT/kernel/config/qemu-aarch64-r54p0.config"
-  echo "  uapi_source=$KDIR/include/uapi/gpu/arm/midgard"
   echo "  host=$(uname -s) $(uname -r) $(uname -m)"
 } > "$DIST/manifest.txt"
 
 (
   cd "$DIST"
   # Sorted, and excluding SHA256SUMS itself so the file can verify in place.
-  find . -type f ! -name SHA256SUMS ! -name manifest.txt ! -path './.run/*' -print0 \
+  find . -type f ! -name SHA256SUMS ! -name manifest.txt ! -path './.run/*' ! -path './.cache/*' -print0 \
     | LC_ALL=C sort -z \
     | xargs -0 sha256sum > SHA256SUMS
 )
@@ -172,7 +137,6 @@ Portable lab packaged: $DIST
   verify it with: cd $DIST && sha256sum -c SHA256SUMS
   provenance:     $DIST/manifest.txt
 
-  after this, work/ and build/rootfs/stage/ can be deleted:
-    nothing in dist/ is derived from them at run time.
-  KERNEL_DIR=$DIST/headers keeps 'make tests' and the ABI gate working offline.
+  after this, work/, build/, downloads/ and dist/headers/ can be deleted:
+    nothing in dist/ is needed at run time except what run.sh decompresses.
 EOF

@@ -6,15 +6,19 @@ They intentionally stop before real GPU execution or page-fault triggering.
 
 ## ABI rule
 
-The tests compile against the **exact integrated r54p0 UAPI headers**. They do not
-reconstruct ioctl structures or numbers locally. Set `KERNEL_DIR` to the Linux tree
-containing the integrated Arm driver and its `include/uapi` headers.
+The 8 P0 tests ship as **prebuilt aarch64 binaries in `dist/bin/`** because that
+is what the guest runs. Rebuilding them requires the exact integrated r54p0 UAPI
+headers under `KERNEL_DIR` (a Linux tree that has had `driver/product/kernel/`
+integrated per `docs/build.md`). Those sources are no longer committed to this
+repo — the working tree was slimmed to the prebuilt lab — so to rebuild:
 
 ```bash
-export KERNEL_DIR=$PWD/work/linux
-make tests
-make test-p0
+KERNEL_DIR=$PWD/work/linux make tests
 ```
+
+after fetching and integrating the sources again (see `docs/build.md`). No
+integrated tree means `make tests` fails fast with a pointer to this; it does not
+silently fall back to a different header set.
 
 A machine without `/dev/mali0` reports the tests as `SKIP` (exit status 77). This is
 expected for the host and for a QEMU guest before the No-Mali driver is loaded.
