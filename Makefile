@@ -4,7 +4,7 @@ RESULTS ?= results/p0-qemu-results.json
 
 .PHONY: bootstrap verify fetch-kernel fetch-mali integrate config build kernel \
         dtb rootfs tests all run clean test-p0 test-p0-qemu \
-        validate-p0-results test-p1 report dist run-dist
+        validate-p0-results test-p1 report dist run-dist manual-test
 
 # scripts/build-r54p0-kernel.sh owns the kernel pipeline. The per-stage scripts
 # under scripts/ are thin delegators kept so existing entry points keep working;
@@ -60,6 +60,11 @@ dist:
 # Run the packaged lab. Works with no kernel tree and no sources present.
 run-dist:
 	./dist/run.sh
+
+# Interactive manual testing - boots to a shell so you can inspect and run
+# tests manually. Requires qemu-system-aarch64 on the host.
+manual-test:
+	./scripts/manual-test.sh
 
 run:
 	./scripts/boot-qemu.sh

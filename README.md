@@ -21,17 +21,19 @@ separate phase.
 This repository ships the prebuilt `dist/` lab (~44 MB). No kernel tree, no DDK
 archive, and no network access is needed after checkout.
 
-## Quick start
-
-```bash
-./dist/run.sh        # boot the guest and run the 8 P0 tests
-```
-
 The original build pipeline (`make verify`, `make kernel`, `make integrate`,
 `make config`, `make rootfs`, `make tests`) is retained as source in `scripts/` and
 documented in `docs/build.md`, but it is not required to run the shipped guest
 suite. `make` targets that depend on the kernel tree now fail fast with a pointer to
 `dist/run.sh` instead of the old source-based flow.
+
+## Quick start
+
+```bash
+./dist/run.sh        # boot the guest and run the 8 P0 tests
+make dist            # assemble dist/ from build outputs
+make manual-test     # interactive manual shell in the guest
+```
 
 ## Research priority
 
